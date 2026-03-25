@@ -1,9 +1,9 @@
 {
     "Sensitive Data": {
         "Email+CC": [
-            "Contact support at support@fintech.com regarding transaction on Visa 4242-1111-2222-3333.",
+            "Contact support at support@fintech.com regarding transaction on Visa 5186-0017-0000-8785",
             "My manager's email is bob.smith@corporate.org; please send the payroll to account ending in 9876.",
-            "Can you verify if card 5105 1051 0510 5105 belongs to alice_doe@gmail.com?",
+            "Can you verify if card 5019 7170 1010 3742 belongs to alice_doe@gmail.com?",
             "Update the billing info for mark@startup.io to AMEX 371234567890123."
         ],
         "Crypto": [
