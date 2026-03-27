@@ -265,7 +265,6 @@ with st.sidebar:
     st.header("App Settings")
     st.button("🗑️ Clear Current Chat", use_container_width=True, on_click=reset_chat)
 
-    # 1. Load triggers dynamically
     trigger_data = {}
     try:
         with open("triggers.txt", "r") as f:
@@ -273,7 +272,6 @@ with st.sidebar:
     except Exception:
         trigger_data = {"System": {"Error": ["Check triggers.txt file"]}}
 
-    # 2. Dynamic Popover Generation
     with st.popover("💡 Triggers", use_container_width=True):
         col_t, col_r = st.columns([0.7, 0.3])
         col_t.markdown("### Sample Prompts")
@@ -294,7 +292,6 @@ with st.sidebar:
                                 if st.button(btn_label, use_container_width=True, key=f"trig_{group_name}_{btn_label}"):
                                     set_prompt(random.choice(prompt_list))
 
-    # --- PROMPT SECURITY TOGGLE ---
     st.markdown("### Protection Layer")
     ps_enabled = st.toggle("Enable Prompt Security", value=True, help="Toggle real-time security scanning on/off")
 
@@ -342,7 +339,6 @@ with st.sidebar:
                     if auto_select:
                         st.session_state.selected_gemini_model = preferred_model
                         selected_model = preferred_model
-                        # RESTORED: Auto-selected caption in sidebar
                         st.caption(f"Auto-selected Gemini model: `{selected_model}`")
                     else:
                         default_ix = chat_models.index(st.session_state.selected_gemini_model)
@@ -381,7 +377,6 @@ with st.container():
     col_title, col_upload = st.columns([0.85, 0.15])
     with col_title:
         st.title("Spooky 𔓎")
-        # RESTORED: App-ID logic and metadata display
         display_id = f"{PS_APP_ID[:16]}..." if len(PS_APP_ID) > 16 else PS_APP_ID
         status_color = ":green" if ps_enabled else ":red"
         status_text = "Connected ●" if ps_enabled else "Bypassed ○"
@@ -497,6 +492,14 @@ if (chat_val is not None or prompt is not None or uploaded_file) and selected_mo
                         model=selected_model,
                         messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.multi_messages[app_mode]]
                     )
+                    
+                    # --- FIXED: COST CALCULATION LOGIC ---
+                    u = response.usage
+                    if u:
+                        rate = 0.15 if "mini" in selected_model else 2.50
+                        # Summing prompt and completion spend based on standard rates
+                        st.session_state.session_costs["AI Gateway (OpenAI)"] += (u.prompt_tokens * rate / 10**6) + (u.completion_tokens * rate*4 / 10**6)
+                    
                     reply = response.choices[0].message.content
                     st.write(reply)
                     st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": reply})
