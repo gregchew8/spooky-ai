@@ -39,6 +39,7 @@ A secure AI chat interface featuring Prompt Security (a SentinelOne company) int
 
 
 ##
+Contributors: dawinci
 
 <br><br><br>
 More detailed information coming soon....
