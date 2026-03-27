@@ -47,6 +47,7 @@ header { background: none !important; border: none !important; }
 
 /* 3. Chat Input Cleanup */
 [data-testid="stChatInput"] > div {
+    background-color: #262730 !important; /* Changed to dark grey to remove the two-tone mix */
     border-radius: 12px !important;
     border: 1px solid transparent !important;
 }
@@ -124,7 +125,7 @@ h1 {
 [data-testid="stVerticalBlock"] > div:has(div.fixed-header-container) {
     position: sticky !important;
     top: 0;
-    background-color: #0e1117;
+    background-color: var(--background-color); 
     z-index: 1000;
     padding-bottom: 10px;
     border-bottom: 1px solid rgba(250, 250, 250, 0.1);
@@ -177,6 +178,8 @@ if "input_text" not in st.session_state: st.session_state.input_text = None
 if "last_debug_info" not in st.session_state: st.session_state.last_debug_info = None
 if "uploader_key" not in st.session_state: st.session_state.uploader_key = 0
 if "last_processed_file" not in st.session_state: st.session_state.last_processed_file = None
+if "gemini_available_models" not in st.session_state: st.session_state.gemini_available_models = []
+if "selected_gemini_model" not in st.session_state: st.session_state.selected_gemini_model = None
 
 # ==========================================================
 # --- HELPERS ---
@@ -203,14 +206,14 @@ def render_debug_box(info):
     status_type = info.get('status_type', 'safe')
     checked_p = info.get('checked_p', '')
     debug_data = info.get('debug', {})
-    
+
     # Label Logic
     if status_type == "blocked":
         label, state = "🚫 Violation Detected", "error"
         content = None
     elif status_type == "redacted":
         # Force the label to show Redacted if status_type indicates it
-        label, state = "⚠️ Content Redacted", "complete" 
+        label, state = "⚠️ Content Redacted", "complete"
         content = f"Redacted Content: {checked_p}"
     else:
         label, state = "✅ Safe", "complete"
@@ -220,6 +223,52 @@ def render_debug_box(info):
         if content: st.warning(content)
         with st.expander("🔍 View Raw API Response", expanded=False):
             st.json(debug_data)
+
+
+def get_env_bool(name, default=False):
+    value = os.getenv(name, str(default)).strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def get_chat_models():
+    models = []
+    for model in genai.list_models():
+        supported_methods = getattr(model, "supported_generation_methods", []) or []
+        if "generateContent" in supported_methods:
+            models.append(model.name)
+    return sorted(set(models))
+
+
+def get_gemini_preferred_order():
+    default_model = os.getenv("DEFAULT_GEMINI_MODEL", "models/gemini-2.0-flash").strip()
+    fallback_models = [
+        item.strip() for item in os.getenv(
+            "FALLBACK_GEMINI_MODELS",
+            "models/gemini-2.0-flash,models/gemini-1.5-flash,models/gemini-1.5-pro",
+        ).split(",") if item.strip()
+    ]
+
+    ordered_models = []
+    for model_name in [default_model] + fallback_models:
+        if model_name and model_name not in ordered_models:
+            ordered_models.append(model_name)
+    return ordered_models
+
+
+def choose_gemini_model(available_models):
+    preferred_order = get_gemini_preferred_order()
+    for model_name in preferred_order:
+        if model_name in available_models:
+            return model_name
+    return available_models[0] if available_models else "Unavailable"
+
+
+def get_runtime_gemini_candidates(selected_model, available_models):
+    candidates = []
+    for model_name in [selected_model] + get_gemini_preferred_order() + list(available_models):
+        if model_name in available_models and model_name not in candidates:
+            candidates.append(model_name)
+    return candidates
 
 # ==========================================================
 # --- SIDEBAR ---
@@ -250,10 +299,10 @@ with st.sidebar:
             # Check if this entry contains sub-items (buttons) or is just a flat list
             if isinstance(sub_items, dict):
                 st.markdown(f"**{group_name}**")
-                
+
                 # Get all button names in this group
                 btn_names = list(sub_items.keys())
-                
+
                 # Create rows with 2 columns each
                 for i in range(0, len(btn_names), 2):
                     cols = st.columns(2)
@@ -262,17 +311,17 @@ with st.sidebar:
                         if i + j < len(btn_names):
                             btn_label = btn_names[i+j]
                             prompt_list = sub_items[btn_label]
-                            
+
                             # Render the button
                             with cols[j]:
                                 if st.button(
-                                    btn_label, 
-                                    use_container_width=True, 
+                                    btn_label,
+                                    use_container_width=True,
                                     # Unique key is essential for buttons generated in loops
                                     key=f"trig_{group_name}_{btn_label}"
                                 ):
                                     set_prompt(random.choice(prompt_list))
-            
+
             elif isinstance(sub_items, list):
                 # Handle legacy flat lists if any exist (e.g. if you didn't nest them)
                 if st.button(group_name, use_container_width=True, key=f"trig_flat_{group_name}"):
@@ -306,15 +355,42 @@ with st.sidebar:
             st.error("🔑 GEMINI_FREE_API_KEY is missing in .env")
             selected_model = "Unavailable"
             debug_mode = False
+            st.session_state.gemini_available_models = []
+            st.session_state.selected_gemini_model = None
         else:
             try:
                 genai.configure(api_key=api_key)
-                chat_models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-                default_ix = next((i for i, name in enumerate(chat_models) if "gemini-2.0-flash" in name), 0)
-                selected_model = st.selectbox("Select Gemini Model (Free Tier)", chat_models, index=default_ix)
+                chat_models = get_chat_models()
+                st.session_state.gemini_available_models = chat_models
+
+                if not chat_models:
+                    st.error("⚠️ No Gemini generateContent models available for this API key.")
+                    selected_model = "Unavailable"
+                else:
+                    auto_select = get_env_bool("AUTO_SELECT_GEMINI_MODEL", True)
+                    preferred_model = choose_gemini_model(chat_models)
+
+                    if st.session_state.selected_gemini_model not in chat_models:
+                        st.session_state.selected_gemini_model = preferred_model
+
+                    if auto_select:
+                        st.session_state.selected_gemini_model = preferred_model
+                        selected_model = preferred_model
+                        st.caption(f"Auto-selected Gemini model: `{selected_model}`")
+                    else:
+                        default_ix = chat_models.index(st.session_state.selected_gemini_model)
+                        selected_model = st.selectbox(
+                            "Select Gemini Model (Free Tier)",
+                            chat_models,
+                            index=default_ix,
+                            key="gemini_model_selectbox",
+                        )
+                        st.session_state.selected_gemini_model = selected_model
             except Exception as e:
                 st.error(f"⚠️ Gemini Connection Failed: {str(e)}")
                 selected_model = "Connection Error"
+                st.session_state.gemini_available_models = []
+                st.session_state.selected_gemini_model = None
         st.caption("Mode: API Integration")
         debug_mode = st.checkbox("Show Debug Info", value=False)
         st.divider()
@@ -377,7 +453,7 @@ def check_security_api(text, context_type="prompt"):
             st.session_state.last_violation = "None"
 
         action = result_block.get("action", "none")
-        
+
         # Check findings explicitly to catch "log" actions that still found data
         findings = content_block.get("findings", {})
         sensitive_count = len(findings.get("Sensitive Data", []))
@@ -391,7 +467,7 @@ def check_security_api(text, context_type="prompt"):
             return False, "Blocked due to policy violations", data, "blocked"
 
         redacted_text = content_block.get("modified_text") or text
-        
+
         # Determine status_type based on actual findings
         if turn_redactions > 0:
             st.session_state.security_stats["redactions"] += turn_redactions
@@ -477,17 +553,17 @@ if is_new_interaction and selected_model not in ["Unavailable", "Connection Erro
         if app_mode == "AI Gateway (OpenAI)":
             # FIX: The OpenAI client specifically requires the /v1 suffix for the Gateway proxy
             openai_base_url = f"{PS_GATEWAY_URL.strip('/')}/v1"
-            
+
             client = OpenAI(
-                base_url=openai_base_url, 
+                base_url=openai_base_url,
                 api_key=api_key,
                 default_headers={
-                    "ps-app-id": PS_APP_ID, 
-                    "forward-domain": "api.openai.com", 
+                    "ps-app-id": PS_APP_ID,
+                    "forward-domain": "api.openai.com",
                     "user": user_email
                 }
             )
-            
+
             with st.chat_message("assistant"):
                 try:
                     response = client.chat.completions.create(
@@ -525,13 +601,38 @@ if is_new_interaction and selected_model not in ["Unavailable", "Connection Erro
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
                         try:
-                            # B. GENERATE RESPONSE
-                            gem_model = genai.GenerativeModel(selected_model)
+                            # B. GENERATE RESPONSE WITH MODEL FALLBACKS
                             gemini_content = [checked_p]
-                            if image_content: gemini_content.append(image_content)
-                            history_payload = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in st.session_state.multi_messages[app_mode][:-1]]
-                            chat = gem_model.start_chat(history=history_payload)
-                            res = chat.send_message(gemini_content)
+                            if image_content:
+                                gemini_content.append(image_content)
+
+                            history_payload = [
+                                {"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]}
+                                for m in st.session_state.multi_messages[app_mode][:-1]
+                            ]
+
+                            available_models = st.session_state.gemini_available_models
+                            candidate_models = get_runtime_gemini_candidates(selected_model, available_models)
+                            res = None
+                            last_error = None
+                            actual_model_used = selected_model
+
+                            for model_name in candidate_models:
+                                try:
+                                    gem_model = genai.GenerativeModel(model_name)
+                                    chat = gem_model.start_chat(history=history_payload)
+                                    res = chat.send_message(gemini_content)
+                                    actual_model_used = model_name
+                                    break
+                                except Exception as runtime_error:
+                                    last_error = runtime_error
+
+                            if res is None:
+                                raise Exception(f"All Gemini fallback models failed. Last error: {last_error}")
+
+                            if actual_model_used != selected_model:
+                                st.session_state.selected_gemini_model = actual_model_used
+                                st.toast(f"Switched to fallback model: {actual_model_used}", icon="⚠️")
 
                             # C. CHECK RESPONSE SECURITY
                             is_res_safe, safe_res, res_debug, res_status_type = check_security_api(res.text, "response")
