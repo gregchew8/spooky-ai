@@ -18,7 +18,6 @@ class TLSAdapter(HTTPAdapter):
     """Force the use of TLS 1.2 or 1.3 to avoid protocol version errors."""
     def init_poolmanager(self, connections, maxsize, block=False):
         ctx = ssl.create_default_context()
-        # Requires TLS 1.2 minimum
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         self.poolmanager = PoolManager(
             num_pools=connections,
@@ -46,6 +45,7 @@ st.set_page_config(
 # ==========================================================
 hide_st_style = """
 <style>
+/* 1. Reset & Basic UI Cleanup */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header { background: none !important; border: none !important; }
@@ -53,6 +53,7 @@ header { background: none !important; border: none !important; }
 [data-testid="stDecoration"] { display: none; }
 [data-testid="stMainBlockContainer"] { padding-top: 1.5rem !important; }
 
+/* 2. Sidebar Styling */
 [data-testid="stSidebar"] {
     background-color: #614869 !important;
 }
@@ -61,11 +62,19 @@ header { background: none !important; border: none !important; }
     gap: 0.5rem !important;
 }
 
+/* Ensure Sidebar buttons are grey, not purple */
+[data-testid="stSidebar"] button {
+    background-color: #262730 !important;
+    color: white !important;
+    border: 1px solid rgba(250, 250, 250, 0.1) !important;
+}
+
 .sidebar-footer {
     position: fixed; bottom: 10px; left: 10px; width: 310px;
     color: #A5B5D1; font-size: 15px; pointer-events: none;
 }
 
+/* 3. Chat Input Cleanup */
 [data-testid="stChatInput"] > div {
     background-color: #262730 !important;
     border-radius: 12px !important;
@@ -76,6 +85,7 @@ header { background: none !important; border: none !important; }
     box-shadow: 0 0 0 0.1rem rgba(97, 72, 105, 0.2) !important;
 }
 
+/* 4. HEADER UPLOAD BUTTON STYLING */
 div.header-upload-btn button {
     background-color: #614869 !important;
     color: white !important;
@@ -87,6 +97,7 @@ div.header-upload-btn button {
     margin-top: 5px !important;
 }
 
+/* 5. CHAT BUBBLES */
 div[data-testid="stChatMessageAvatarBackground"] {
     border-radius: 8px !important;
 }
@@ -105,17 +116,14 @@ div[data-testid="stChatMessage"] {
     padding: 0.5rem 0.8rem !important;
 }
 
+/* 6. TOAST NOTIFICATIONS */
 div[data-testid="stToastContainer"] {
     bottom: 30px !important;
     right: 30px !important;
     z-index: 9999999 !important;
 }
 
-[data-testid="stCheckbox"] label p, [data-testid="stWidgetLabel"] p {
-    font-size: 14px !important;
-    color: rgb(250, 250, 250) !important;
-}
-
+/* 7. PINNED HEADER LOGIC */
 [data-testid="stVerticalBlock"] > div:has(div.fixed-header-container) {
     position: sticky !important;
     top: 0;
@@ -240,13 +248,18 @@ with st.sidebar:
 
     if app_mode == "AI Gateway (OpenAI)":
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key: st.error("🔑 OPENAI_API_KEY missing.")
-        else: selected_model = st.selectbox("Select OpenAI Model", ["gpt-4o-mini", "gpt-4o"], index=0)
+        if not api_key: 
+            st.error("🔑 OPENAI_API_KEY missing.")
+            selected_model = "Unavailable" # FIX: Prevent NameError later
+        else: 
+            selected_model = st.selectbox("Select OpenAI Model", ["gpt-4o-mini", "gpt-4o"], index=0)
         st.caption("Mode: AI Gateway (Reverse Proxy)")
         if st.button("💰"): st.session_state.show_cost = not st.session_state.show_cost
     else:
         api_key = os.getenv("GEMINI_FREE_API_KEY")
-        if not api_key: st.error("🔑 GEMINI_FREE_API_KEY missing.")
+        if not api_key: 
+            st.error("🔑 GEMINI_FREE_API_KEY missing.")
+            selected_model = "Unavailable"
         else:
             try:
                 genai.configure(api_key=api_key)
@@ -294,12 +307,11 @@ with st.container():
             uploaded_file = st.file_uploader("Scan File", type=["txt", "pdf", "png", "jpg"], label_visibility="collapsed", key=f"f_{st.session_state.uploader_key}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# SECURITY LOGIC (FIXED WITH SESSION ADAPTER)
+# SECURITY LOGIC
 def check_security_api(text, context_type="prompt"):
     if not ps_enabled: return True, text, {"status": "Bypassed"}, "safe"
     try:
         headers = {"Content-Type": "application/json", "APP-ID": PS_APP_ID}
-        # FIX: Using persistent session with TLS Adapter
         response = http_session.post(PS_PROTECT_API, json={context_type: text, "user": user_email}, headers=headers, timeout=15)
         data = response.json()
         res_b = data.get("result", {})
@@ -307,14 +319,11 @@ def check_security_api(text, context_type="prompt"):
         cont_b = res_b.get(context_type, {})
         v_list = cont_b.get("violations", [])
         st.session_state.last_violation = " + ".join(v_list) if v_list else ("None" if context_type == "prompt" else st.session_state.last_violation)
-        
         findings = cont_b.get("findings", {})
         redacts = len(findings.get("Sensitive Data", [])) + len(findings.get("Secrets", [])) + len(findings.get("Regex", []))
-        
         if response.status_code == 403 or res_b.get("action") == "block":
             st.session_state.security_stats["blocks"] += 1; st.toast("Security Block!", icon="🚨")
             return False, "Blocked", data, "blocked"
-        
         redacted = cont_b.get("modified_text") or text
         if redacts > 0: 
             st.session_state.security_stats["redactions"] += redacts; st.toast(f"{redacts} items redacted!", icon="⚠️")
@@ -375,7 +384,12 @@ if (prompt or uploaded_file) and selected_model not in ["Unavailable", "Connecti
                         st.session_state.session_costs["AI Gateway (OpenAI)"] += (u.prompt_tokens * rate / 10**6) + (u.completion_tokens * rate*4 / 10**6)
                     reply = r.choices[0].message.content; st.write(reply)
                     st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": reply}); refresh_metrics()
-                except Exception as e: st.error(str(e))
+                # CLEANER EXCEPTION HANDLING
+                except Exception as e: 
+                    if "401" in str(e):
+                        st.error("🚫 Authentication Error: Your OpenAI API Key is invalid or not provided correctly. Check your .env file.")
+                    else:
+                        st.error(f"⚠️ OpenAI Error: {str(e)[:200]}...") # Truncate long technical dumps
         else:
             safe, check, dbg, status = check_security_api(full_p, "prompt")
             st.session_state.last_debug_info = {"checked_p": check, "original_p": full_p, "debug": dbg, "status_type": status}
