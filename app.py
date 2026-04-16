@@ -149,9 +149,9 @@ if not PS_APP_ID or not PS_GATEWAY_URL:
 PS_PROTECT_API = f"{PS_GATEWAY_URL.strip('/')}/api/protect"
 
 if "multi_messages" not in st.session_state:
-    st.session_state.multi_messages = {"AI Gateway (OpenAI)": [], "API (Gemini)": []}
+    st.session_state.multi_messages = {"AI Gateway (OpenAI)": [], "API (Gemini)": [], "API (Groq)": []}
 if "session_costs" not in st.session_state:
-    st.session_state.session_costs = {"AI Gateway (OpenAI)": 0.0, "API (Gemini)": 0.0}
+    st.session_state.session_costs = {"AI Gateway (OpenAI)": 0.0, "API (Gemini)": 0.0, "API (Groq)": 0.0}
 if "security_stats" not in st.session_state:
     st.session_state.security_stats = {"blocks": 0, "redactions": 0}
 if "last_latency" not in st.session_state: st.session_state.last_latency = 0
@@ -238,28 +238,41 @@ with st.sidebar:
     st.markdown("### Protection Layer")
     ps_enabled = st.toggle("Enable Prompt Security", value=True)
     st.divider()
-    app_mode = st.radio("Select Prompt Security Integration:", ["API (Gemini)", "AI Gateway (OpenAI)"],
-                        index=0 if st.session_state.current_integration == "API (Gemini)" else 1)
+    app_mode = st.radio("Select Prompt Security Integration:", ["API (Gemini)", "API (Groq)", "AI Gateway (OpenAI)"],
+                        index=0 if st.session_state.current_integration == "API (Gemini)" else (1 if st.session_state.current_integration == "API (Groq)" else 2))
+    
     if app_mode != st.session_state.current_integration:
         st.session_state.current_integration, st.session_state.last_debug_info = app_mode, None
         st.rerun()
+        
     user_email = st.text_input("User Identity", value=os.getenv("DEMO_USER_EMAIL", "john.doe@unknown.com"))
     st.divider()
 
     if app_mode == "AI Gateway (OpenAI)":
         api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key: 
-            st.error("🔑 OPENAI_API_KEY missing.")
-            selected_model = "Unavailable" # FIX: Prevent NameError later
-        else: 
-            selected_model = st.selectbox("Select OpenAI Model", ["gpt-4o-mini", "gpt-4o"], index=0)
+        if not api_key: st.error("🔑 OPENAI_API_KEY missing."); selected_model = "Unavailable"
+        else: selected_model = st.selectbox("Select OpenAI Model", ["gpt-4o-mini", "gpt-4o"], index=0)
         st.caption("Mode: AI Gateway (Reverse Proxy)")
         if st.button("💰"): st.session_state.show_cost = not st.session_state.show_cost
+
+    elif app_mode == "API (Groq)":
+        api_key = os.getenv("GROQ_API_KEY")
+        if not api_key: st.error("🔑 GROQ_API_KEY missing."); selected_model = "Unavailable"
+        else: 
+            # UPGRADED: Replaced deprecated models with current valid model list 
+            selected_model = st.selectbox("Select Groq Model", [
+                "openai/gpt-oss-120b", 
+                "llama-3.3-70b-versatile", 
+                "llama-3.1-8b-instant",
+                "qwen/qwen3-32b"
+            ], index=0)
+        st.caption("Mode: API Integration")
+        debug_mode = st.checkbox("Show Debug Info", value=False)
+        #st.info("💡 Groq is highly recommended for users hitting Gemini rate limits.")
+
     else:
         api_key = os.getenv("GEMINI_FREE_API_KEY")
-        if not api_key: 
-            st.error("🔑 GEMINI_FREE_API_KEY missing.")
-            selected_model = "Unavailable"
+        if not api_key: st.error("🔑 GEMINI_FREE_API_KEY missing."); selected_model = "Unavailable"
         else:
             try:
                 genai.configure(api_key=api_key)
@@ -275,13 +288,13 @@ with st.sidebar:
             except Exception as e: st.error(str(e))
         st.caption("Mode: API Integration")
         debug_mode = st.checkbox("Show Debug Info", value=False)
-    
+
     sidebar_metrics = st.empty()
 
 def refresh_metrics():
     with sidebar_metrics.container():
-        if app_mode == "AI Gateway (OpenAI)":
-            if st.session_state.show_cost: st.info(f"**Total Spend:** ${st.session_state.session_costs['AI Gateway (OpenAI)']:,.6f}")
+        if "AI Gateway" in app_mode:
+            if st.session_state.show_cost: st.info(f"**Total Spend:** ${st.session_state.session_costs[app_mode]:,.6f}")
         else:
             with st.expander("Session Stats [beta]", expanded=False):
                 c1, c2 = st.columns(2)
@@ -342,7 +355,7 @@ for i, m in enumerate(st.session_state.multi_messages[app_mode]):
     with st.chat_message(m["role"]): st.write(m["content"])
     if i == last_idx:
         debug_ph = st.empty()
-        if app_mode == "API (Gemini)" and debug_mode and st.session_state.last_debug_info:
+        if "API" in app_mode and debug_mode and st.session_state.last_debug_info:
             info = st.session_state.last_debug_info
             if info.get('original_p') == m["content"]:
                 with debug_ph.container(): render_debug_box(info)
@@ -372,9 +385,14 @@ if (prompt or uploaded_file) and selected_model not in ["Unavailable", "Connecti
             st.write(full_p); 
             if img: st.image(img, width=300)
         
+        # --- OPENAI GATEWAY METHOD ---
         if app_mode == "AI Gateway (OpenAI)":
-            base = f"{PS_GATEWAY_URL.strip('/')}/v1" if ps_enabled else "https://api.openai.com/v1"
-            client = OpenAI(base_url=base, api_key=api_key, default_headers={"ps-app-id": PS_APP_ID, "forward-domain": "api.openai.com", "user": user_email} if ps_enabled else {})
+            base_url = f"{PS_GATEWAY_URL.strip('/')}/v1" if ps_enabled else "https://api.openai.com/v1"
+            client = OpenAI(
+                base_url=base_url,
+                api_key=api_key,
+                default_headers={"ps-app-id": PS_APP_ID, "forward-domain": "api.openai.com", "user": user_email} if ps_enabled else {}
+            )
             with st.chat_message("assistant"):
                 try:
                     r = client.chat.completions.create(model=selected_model, messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.multi_messages[app_mode]])
@@ -384,17 +402,18 @@ if (prompt or uploaded_file) and selected_model not in ["Unavailable", "Connecti
                         st.session_state.session_costs["AI Gateway (OpenAI)"] += (u.prompt_tokens * rate / 10**6) + (u.completion_tokens * rate*4 / 10**6)
                     reply = r.choices[0].message.content; st.write(reply)
                     st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": reply}); refresh_metrics()
-                # CLEANER EXCEPTION HANDLING
                 except Exception as e: 
-                    if "401" in str(e):
-                        st.error("🚫 Authentication Error: Your OpenAI API Key is invalid or not provided correctly. Check your .env file.")
-                    else:
-                        st.error(f"⚠️ OpenAI Error: {str(e)[:200]}...") # Truncate long technical dumps
+                    if "401" in str(e): st.error(f"🚫 Auth Error: Your {app_mode} Key is invalid.")
+                    else: st.error(f"⚠️ Error: {str(e)[:200]}...")
+        
+        # --- API METHOD (GEMINI & GROQ) ---
         else:
+            # 1. Protect Prompt
             safe, check, dbg, status = check_security_api(full_p, "prompt")
             st.session_state.last_debug_info = {"checked_p": check, "original_p": full_p, "debug": dbg, "status_type": status}
             if debug_mode: render_debug_box(st.session_state.last_debug_info)
             refresh_metrics()
+            
             if not safe:
                 m = "Blocked due to policy violations"
                 st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": m})
@@ -403,19 +422,50 @@ if (prompt or uploaded_file) and selected_model not in ["Unavailable", "Connecti
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
                         try:
-                            cont = [check]; 
-                            if img: cont.append(img)
-                            hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in st.session_state.multi_messages[app_mode][:-1]]
-                            res = None
-                            for mname in get_runtime_gemini_candidates(selected_model, st.session_state.gemini_available_models):
-                                try: res = genai.GenerativeModel(mname).start_chat(history=hist).send_message(cont); break
-                                except: continue
-                            s_safe, s_reply, s_dbg, s_status = check_security_api(res.text, "response")
-                            st.write(s_reply); st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": s_reply})
-                            if s_status in ["redacted", "blocked"]:
-                                st.session_state.last_debug_info = {"checked_p": s_reply, "original_p": res.text, "debug": s_dbg, "status_type": s_status}
-                                if debug_mode: render_debug_box(st.session_state.last_debug_info)
+                            res_text = None
+                            
+                            # 2A. Generate Response (GEMINI)
+                            if app_mode == "API (Gemini)":
+                                cont = [check]; 
+                                if img: cont.append(img)
+                                hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in st.session_state.multi_messages[app_mode][:-1]]
+                                res = None
+                                for mname in get_runtime_gemini_candidates(selected_model, st.session_state.gemini_available_models):
+                                    try: 
+                                        res = genai.GenerativeModel(mname).start_chat(history=hist).send_message(cont)
+                                        break
+                                    except Exception as e:
+                                        if "429" in str(e): continue
+                                        else: raise e
+                                if res and hasattr(res, 'text'):
+                                    res_text = res.text
+                                else: 
+                                    st.error("🚨 Rate limit exceeded (429) or no models available. Please wait 60 seconds.")
+                            
+                            # 2B. Generate Response (GROQ)
+                            elif app_mode == "API (Groq)":
+                                if img: st.warning("🖼️ Image uploads are not currently supported by Groq text models. Ignoring image.")
+                                groq_client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=api_key)
+                                messages_payload = [{"role": m["role"], "content": m["content"]} for m in st.session_state.multi_messages[app_mode][:-1]]
+                                messages_payload.append({"role": "user", "content": check})
+                                
+                                chat_completion = groq_client.chat.completions.create(
+                                    messages=messages_payload,
+                                    model=selected_model
+                                )
+                                res_text = chat_completion.choices[0].message.content
+                            
+                            # 3. Protect Response
+                            if res_text:
+                                s_safe, s_reply, s_dbg, s_status = check_security_api(res_text, "response")
+                                st.write(s_reply); st.session_state.multi_messages[app_mode].append({"role": "assistant", "content": s_reply})
+                                if s_status in ["redacted", "blocked"]:
+                                    st.session_state.last_debug_info = {"checked_p": s_reply, "original_p": res_text, "debug": s_dbg, "status_type": s_status}
+                                    if debug_mode: render_debug_box(st.session_state.last_debug_info)
+                            
                             refresh_metrics()
-                        except Exception as e: st.error(str(e))
+                        except Exception as e: 
+                            if "401" in str(e): st.error(f"🚫 Auth Error: Your {app_mode} Key is invalid.")
+                            else: st.error(f"⚠️ Error: {str(e)[:200]}...")
 
 st.sidebar.markdown('<div class="sidebar-footer">Made by Gastón Z and AI 🤖</div>', unsafe_allow_html=True)
